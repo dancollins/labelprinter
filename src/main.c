@@ -419,81 +419,12 @@ static void close_label(struct label *label)
     free(label);
 }
 
-static void print_bitmap_header(BITMAPFILEHEADER *file_header)
+static void print_label(
+    char *printer_name,
+    struct paper_size *paper_size,
+    char *filename)
 {
-    if (file_header == NULL)
-    {
-        printf("  NULL\n");
-        return;
-    }
-
-    printf("  type: 0x%x\n", file_header->bfType);
-    printf("  size: %u bytes\n", file_header->bfSize);
-    printf("  offset: %u bytes\n", file_header->bfOffBits);
-
-    /* The V5 header is a superset - so we just need to be careful not
-     * to look at fields outside of this structure when dealing with
-     * older headers. */
-    BITMAPV5HEADER *v5 =
-        (BITMAPV5HEADER *)((void *)file_header + sizeof(BITMAPFILEHEADER));
-
-    printf("  header size: %u bytes\n", v5->bV5Size);
-
-    switch (v5->bV5Size)
-    {
-    case sizeof(BITMAPCOREHEADER):
-    {
-        BITMAPCOREHEADER *core = (BITMAPCOREHEADER *)v5;
-        printf("  OS/2-style bitmap\n");
-        printf("  width: %u pixels\n", core->bcWidth);
-        printf("  height: %u pixels\n", core->bcHeight);
-        printf("  planes: %u\n", core->bcPlanes);
-        printf("  bits per pixel: %u\n", core->bcBitCount);
-        return;
-    }
-
-    case sizeof(BITMAPINFOHEADER):
-        printf("  Windows 3.0-style bitmap\n");
-        break;
-
-    case sizeof(BITMAPV4HEADER):
-        printf("  Windows 95-style bitmap\n");
-        break;
-
-    case sizeof(BITMAPV5HEADER):
-        printf("  Windows 98-style bitmap\n");
-        break;
-
-    default:
-        printf("  Unknown header (size=%u)\n", v5->bV5Size);
-        return;
-    }
-
-    /* Common fields. */
-    printf("  width: %u pixels\n", v5->bV5Width);
-    printf("  height: %u pixels\n", v5->bV5Height);
-    printf("  planes: %u\n", v5->bV5Planes);
-    printf("  bits per pixel: %u\n", v5->bV5BitCount);
-    printf("  compression: %u\n", v5->bV5Compression);
-    printf("  bitmap size: %u bytes\n", v5->bV5SizeImage);
-    printf("  X pixels per meter: %u\n", v5->bV5XPelsPerMeter);
-    printf("  Y pixels per meter: %u\n", v5->bV5YPelsPerMeter);
-    printf("  used colours: %u\n", v5->bV5ClrUsed);
-    printf("  important colours: %u\n", v5->bV5ClrImportant);
-
-    /* Windows 3.0-style bitmap. */
-    if (v5->bV5Size == sizeof(BITMAPINFOHEADER))
-    {
-        /* When the compression is BI_BITFIELDS, the masks are stored
-         * right after the BITMAPINFOHEADER structure. */
-        if (v5->bV5Compression == BI_BITFIELDS)
-        {
-            printf("  red mask: 0x%x\n", v5->bV5RedMask);
-            printf("  green mask: 0x%x\n", v5->bV5GreenMask);
-            printf("  blue mask: 0x%x\n", v5->bV5BlueMask);
-        }
-        return;
-    }
+    printf(" 🏷️ %s\n", filename);
 }
 
 int main(int argc, char **argv)
@@ -501,6 +432,8 @@ int main(int argc, char **argv)
     char *printer_name = NULL, *default_printer_name = NULL;
     char *paper_size_name = NULL, *default_paper_size_name = NULL;
     int opt;
+
+    SetConsoleOutputCP(CP_UTF8);
 
     struct paper_size *paper_size = NULL;
 
@@ -552,7 +485,6 @@ int main(int argc, char **argv)
         }
 
         printer_name = default_printer_name;
-        printf("Using printer: %s\n", printer_name);
     }
 
     /* Grab the paper size. */
@@ -566,7 +498,6 @@ int main(int argc, char **argv)
         }
 
         paper_size_name = default_paper_size_name;
-        printf("Using paper size: %s\n", paper_size_name);
     }
 
     paper_size = get_paper_size(printer_name, paper_size_name);
@@ -581,22 +512,13 @@ int main(int argc, char **argv)
         goto exit;
     }
 
+    printf(" 🖨️ %s\n", printer_name);
+    printf(" 📄 %s\n", paper_size_name);
+
     for (int i = 0; i < file_count; i++)
     {
         char *filename = argv[optind + i];
-
-        struct label *label = open_label(filename);
-        if (label == NULL)
-        {
-            continue;
-        }
-
-        printf("%s\n", filename);
-        printf("file size: %d bytes\n", label->size);
-
-        print_bitmap_header(label->header);
-
-        close_label(label);
+        print_label(printer_name, paper_size, filename);
     }
 
 exit:
