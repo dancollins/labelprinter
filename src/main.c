@@ -26,6 +26,7 @@ struct label
 static struct option long_options[] = {
     {"printer", required_argument, NULL, 'p'},
     {"paper-size", required_argument, NULL, 's'},
+    {"orientation", required_argument, NULL, 'o'},
     {"help", 0, NULL, 'h'},
     {NULL, 0, NULL, 0}};
 
@@ -35,6 +36,7 @@ static void print_usage(void)
     fprintf(stderr, "Options:\n");
     fprintf(stderr, "  -p, --printer NAME     Specify the printer name (default: system default)\n");
     fprintf(stderr, "  -s, --paper-size SIZE  Specify the paper size (default: printer default)\n");
+    fprintf(stderr, "  -o, --orientation [landscape|portrait] Specify the orientation (default: printer default)\n");
     fprintf(stderr, "  -h, --help             Display this help message and exit\n");
     fprintf(stderr, "Arguments:\n");
     fprintf(stderr, "  filename               File(s) to process\n");
@@ -266,11 +268,13 @@ exit:
     return paper_size;
 }
 
-static BOOL set_paper_size(
-    char *printer_name, struct paper_size *paper_size)
+static BOOL configure_printer(
+    char *printer_name,
+    DEVMODE *devmode,
+    struct paper_size *paper_size,
+    BOOL landscape)
 {
-    HANDLE printer = INVALID_HANDLE_VALUE;
-    DEVMODE *devmode = NULL;
+    HANDLE printer = NULL;
     int devmode_size = 0;
 
     if (!OpenPrinter(printer_name, &printer, NULL))
@@ -279,9 +283,8 @@ static BOOL set_paper_size(
         goto exit;
     }
 
-    /* Retrieve the DEVMODE structure. */
     devmode_size = DocumentProperties(
-        NULL, printer, printer_name, NULL, NULL, 0);
+        NULL, printer, (char *)printer_name, NULL, NULL, 0);
 
     if (devmode_size <= 0)
     {
@@ -309,8 +312,9 @@ static BOOL set_paper_size(
     }
 
     /* Set the paper size. */
-    devmode->dmFields = DM_PAPERSIZE;
+    devmode->dmFields = DM_PAPERSIZE | DM_ORIENTATION;
     devmode->dmPaperSize = paper_size->size;
+    devmode->dmOrientation = landscape ? DMORIENT_LANDSCAPE : DMORIENT_PORTRAIT;
 
     if (DocumentProperties(
             NULL,
@@ -415,32 +419,52 @@ exit:
 
 static void close_label(struct label *label)
 {
-    assert(label != NULL);
+    if (label == NULL)
+        return;
+
     free(label);
 }
 
 static void print_label(
+    HDC context,
     char *printer_name,
     struct paper_size *paper_size,
     char *filename)
 {
+    BOOL success = FALSE;
+
+    struct label *label = open_label(filename);
+    if (label == NULL)
+    {
+        printf("⚠️ Failed to open label!\n");
+        goto exit;
+    }
+
     printf(" 🏷️ %s\n", filename);
+
+exit:
+    close_label(label);
 }
 
 int main(int argc, char **argv)
 {
     char *printer_name = NULL, *default_printer_name = NULL;
     char *paper_size_name = NULL, *default_paper_size_name = NULL;
+    char *orientation = NULL;
+    BOOL is_landscape = FALSE;
+    int file_count = 0;
     int opt;
 
     SetConsoleOutputCP(CP_UTF8);
 
+    HDC context = NULL;
+    DEVMODE *devmode = NULL;
     struct paper_size *paper_size = NULL;
 
     while ((opt = getopt_long(
                 argc,
                 argv,
-                "p:s:h",
+                "p:s:o:h",
                 long_options,
                 NULL)) != -1)
     {
@@ -452,6 +476,10 @@ int main(int argc, char **argv)
 
         case 's':
             paper_size_name = optarg;
+            break;
+
+        case 'o':
+            orientation = optarg;
             break;
 
         case 'h':
@@ -466,10 +494,37 @@ int main(int argc, char **argv)
         }
     }
 
-    int file_count = argc - optind;
+    file_count = argc - optind;
     if (file_count <= 0)
     {
         fprintf(stderr, "No files to process!\n");
+        print_usage();
+        exit(EXIT_FAILURE);
+    }
+
+    if (orientation != NULL)
+    {
+        for (int i = 0; i < strlen(orientation); i++)
+        {
+            orientation[i] = tolower(orientation[i]);
+        }
+    }
+    else
+    {
+        orientation = "portrait";
+    }
+
+    if (strcmp(orientation, "landscape") == 0)
+    {
+        is_landscape = TRUE;
+    }
+    else if (strcmp(orientation, "portrait") == 0)
+    {
+        is_landscape = FALSE;
+    }
+    else
+    {
+        fprintf(stderr, "Invalid orientation: %s\n", orientation);
         print_usage();
         exit(EXIT_FAILURE);
     }
@@ -506,19 +561,25 @@ int main(int argc, char **argv)
         goto exit;
     }
 
-    /* Set up the printer.*/
-    if (!set_paper_size(printer_name, paper_size))
+    if (!configure_printer(printer_name, devmode, paper_size, is_landscape))
     {
         goto exit;
     }
 
+    context = CreateDC("WINSPOOL", printer_name, NULL, devmode);
+    if (context == NULL)
+    {
+        fprintf(stderr, "Failed to create printer context.\n");
+        goto exit;
+    }
+
     printf(" 🖨️ %s\n", printer_name);
-    printf(" 📄 %s\n", paper_size_name);
+    printf(" 📄 %s (%s)\n", paper_size_name, orientation);
 
     for (int i = 0; i < file_count; i++)
     {
         char *filename = argv[optind + i];
-        print_label(printer_name, paper_size, filename);
+        print_label(context, printer_name, paper_size, filename);
     }
 
 exit:
@@ -527,6 +588,15 @@ exit:
 
     if (default_paper_size_name != NULL)
         free(default_paper_size_name);
+
+    if (devmode != NULL)
+        free(devmode);
+
+    if (paper_size != NULL)
+        free(paper_size);
+
+    if (context != NULL)
+        DeleteDC(context);
 
     return 0;
 }
