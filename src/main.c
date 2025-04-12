@@ -18,7 +18,7 @@
     {                                     \
         if (verbose)                      \
         {                                 \
-            fputs(DIM "   ", stdout);     \
+            fputs(DIM "    ", stdout);    \
             fprintf(stdout, __VA_ARGS__); \
             fputs(RESET, stdout);         \
         }                                 \
@@ -62,14 +62,14 @@ static void print_usage(void)
 {
     fprintf(stderr, "Usage: labelprinter [options] [filename...]\n");
     fprintf(stderr, "Options:\n");
-    fprintf(stderr, "  -p, --printer NAME     Specify the printer name (default: system default)\n");
-    fprintf(stderr, "  -s, --paper-size SIZE  Specify the paper size (default: printer default)\n");
-    fprintf(stderr, "  -o, --orientation [landscape|portrait] Specify the orientation (default: printer default)\n");
-    fprintf(stderr, "  -d, --dry-run          Do not print, just simulate the operation\n");
-    fprintf(stderr, "  -v, --verbose          Enable verbose output\n");
-    fprintf(stderr, "  -h, --help             Display this help message and exit\n");
+    fprintf(stderr, "  -p, --printer NAME                      Specify the printer name (default: system default)\n");
+    fprintf(stderr, "  -s, --paper-size SIZE                   Specify the paper size (default: printer default)\n");
+    fprintf(stderr, "  -o, --orientation [landscape|portrait]  Specify the orientation (default: printer default)\n");
+    fprintf(stderr, "  -d, --dry-run                           Do not print, just simulate the operation\n");
+    fprintf(stderr, "  -v, --verbose                           Enable verbose output\n");
+    fprintf(stderr, "  -h, --help                              Display this help message and exit\n");
     fprintf(stderr, "Arguments:\n");
-    fprintf(stderr, "  filename               File(s) to process\n");
+    fprintf(stderr, "  filename                                File(s) to process\n");
 }
 
 /**
