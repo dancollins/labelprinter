@@ -578,7 +578,7 @@ static BOOL print_label(
     }
 
     /* Set up the coordinate space to handle the scaling. */
-    if (SetMapMode(printer_context, MM_ISOTROPIC) == 0)
+    if (SetMapMode(printer_context, MM_ANISOTROPIC) == 0)
     {
         ERR("Failed to set map mode.\n");
         goto exit;
