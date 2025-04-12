@@ -10,17 +10,42 @@
 
 #define PAPER_NAME_SIZE (64)
 
+#define RESET "\x1b[0m"
+#define RED "\x1b[31m"
+#define BLUE "\x1b[34m"
+
+#define DBG(...)                          \
+    {                                     \
+        if (verbose)                      \
+        {                                 \
+            fputs(BLUE, stdout);          \
+            fprintf(stdout, __VA_ARGS__); \
+            fputs(RESET, stdout);         \
+        }                                 \
+    }
+
+#define ERR(...)                      \
+    {                                 \
+        fputs(RED, stderr);           \
+        fprintf(stderr, __VA_ARGS__); \
+        fputs(RESET, stderr);         \
+    }
+
 struct paper_size
 {
     char name[PAPER_NAME_SIZE];
     short size;
-    POINT dimensions;
+    float width_mm;
+    float height_mm;
 };
 
 struct label
 {
     BITMAPFILEHEADER *header;
-    DWORD size;
+    BITMAPINFOHEADER *info_header;
+    void *bits;
+    int width, height;
+    int xres, yres;
 };
 
 static struct option long_options[] = {
@@ -30,6 +55,9 @@ static struct option long_options[] = {
     {"help", 0, NULL, 'h'},
     {NULL, 0, NULL, 0}};
 
+static BOOL verbose = FALSE;
+static BOOL dry_run = FALSE;
+
 static void print_usage(void)
 {
     fprintf(stderr, "Usage: labelprinter [options] [filename...]\n");
@@ -37,6 +65,8 @@ static void print_usage(void)
     fprintf(stderr, "  -p, --printer NAME     Specify the printer name (default: system default)\n");
     fprintf(stderr, "  -s, --paper-size SIZE  Specify the paper size (default: printer default)\n");
     fprintf(stderr, "  -o, --orientation [landscape|portrait] Specify the orientation (default: printer default)\n");
+    fprintf(stderr, "  -d, --dry-run          Do not print, just simulate the operation\n");
+    fprintf(stderr, "  -v, --verbose          Enable verbose output\n");
     fprintf(stderr, "  -h, --help             Display this help message and exit\n");
     fprintf(stderr, "Arguments:\n");
     fprintf(stderr, "  filename               File(s) to process\n");
@@ -55,23 +85,24 @@ static char *get_default_printer(void)
     GetDefaultPrinter(NULL, &size);
     if (size == 0)
     {
-        fprintf(stderr, "Failed to get default printer name.\n");
+        ERR("Failed to get default printer name.\n");
         goto exit;
     }
 
     printer_name = (char *)malloc(size);
     if (printer_name == NULL)
     {
-        fprintf(
-            stderr, "Failed to allocate memory for default printer name.\n");
+        ERR("Failed to allocate memory for default printer name.\n");
         goto exit;
     }
 
     if (!GetDefaultPrinter(printer_name, &size))
     {
-        fprintf(stderr, "Failed to get default printer name.\n");
+        ERR("Failed to get default printer name.\n");
         goto exit;
     }
+
+    DBG("Default printer: %s\n", printer_name);
 
     return printer_name;
 
@@ -96,7 +127,7 @@ static char *get_default_paper_size_name(char *printer_name)
 
     if (!OpenPrinter(printer_name, &printer, NULL))
     {
-        fprintf(stderr, "Failed to open printer %s.\n", printer_name);
+        ERR("Failed to open printer %s.\n", printer_name);
         goto exit;
     }
 
@@ -104,41 +135,43 @@ static char *get_default_paper_size_name(char *printer_name)
     GetPrinter(printer, 2, NULL, 0, &size);
     if (size == 0)
     {
-        fprintf(stderr, "Failed to get printer info.\n");
+        ERR("Failed to get printer info.\n");
         goto exit;
     }
 
     PRINTER_INFO_2 *printer_info = (PRINTER_INFO_2 *)malloc(size);
     if (printer_info == NULL)
     {
-        fprintf(stderr, "Failed to allocate memory for printer info.\n");
+        ERR("Failed to allocate memory for printer info.\n");
         goto exit;
     }
 
     if (!GetPrinter(printer, 2, (void *)printer_info, size, &size))
     {
-        fprintf(stderr, "Failed to get printer info.\n");
+        ERR("Failed to get printer info.\n");
         goto exit;
     }
 
     if (printer_info->pDevMode == NULL)
     {
-        fprintf(stderr, "DEVMODE not found in printer info.\n");
+        ERR("DEVMODE not found in printer info.\n");
         goto exit;
     }
 
     paper_size = strdup(printer_info->pDevMode->dmFormName);
     if (paper_size == NULL)
     {
-        fprintf(stderr, "Failed to allocate memory for paper size name.\n");
+        ERR("Failed to allocate memory for paper size name.\n");
         goto exit;
     }
 
     if (!ClosePrinter(printer))
     {
-        fprintf(stderr, "Failed to close printer.\n");
+        ERR("Failed to close printer.\n");
         goto exit;
     }
+
+    DBG("Default paper size: %s\n", paper_size);
 
     return paper_size;
 
@@ -178,49 +211,51 @@ static struct paper_size *get_paper_size(
         printer_name, NULL, DC_PAPERS, NULL, NULL);
     if (paper_count <= 0)
     {
-        fprintf(stderr, "Failed to get paper sizes.\n");
+        ERR("Failed to get paper sizes.\n");
         goto exit;
     }
+
+    DBG("Paper count: %d\n", paper_count);
 
     sizes = (short *)malloc(paper_count * sizeof(short));
     if (sizes == NULL)
     {
-        fprintf(stderr, "Failed to allocate memory for paper sizes.\n");
+        ERR("Failed to allocate memory for paper sizes.\n");
         goto exit;
     }
 
     if (DeviceCapabilities(
             printer_name, NULL, DC_PAPERS, (char *)sizes, NULL) <= 0)
     {
-        fprintf(stderr, "Failed to get paper sizes.\n");
+        ERR("Failed to get paper sizes.\n");
         goto exit;
     }
 
     dimensions = (POINT *)malloc(paper_count * sizeof(POINT));
     if (dimensions == NULL)
     {
-        fprintf(stderr, "Failed to allocate memory for paper sizes.\n");
+        ERR("Failed to allocate memory for paper sizes.\n");
         goto exit;
     }
 
     if (DeviceCapabilities(
             printer_name, NULL, DC_PAPERSIZE, (char *)dimensions, NULL) <= 0)
     {
-        fprintf(stderr, "Failed to get paper dimensions.\n");
+        ERR("Failed to get paper dimensions.\n");
         goto exit;
     }
 
     names = (char *)malloc(paper_count * PAPER_NAME_SIZE);
     if (names == NULL)
     {
-        fprintf(stderr, "Failed to allocate memory for paper names.\n");
+        ERR("Failed to allocate memory for paper names.\n");
         goto exit;
     }
 
     if (DeviceCapabilities(
             printer_name, NULL, DC_PAPERNAMES, (char *)names, NULL) <= 0)
     {
-        fprintf(stderr, "Failed to get paper names.\n");
+        ERR("Failed to get paper names.\n");
         goto exit;
     }
 
@@ -229,6 +264,7 @@ static struct paper_size *get_paper_size(
     for (int i = 0; i < paper_count; i++)
     {
         const char *name = names + (i * PAPER_NAME_SIZE);
+        DBG("Checking paper size: %s\n", name);
         if (strncmp(name, paper_size_name, PAPER_NAME_SIZE) != 0)
             continue;
 
@@ -236,24 +272,28 @@ static struct paper_size *get_paper_size(
         paper_size = (struct paper_size *)malloc(sizeof(struct paper_size));
         if (paper_size == NULL)
         {
-            fprintf(
-                stderr,
-                "Failed to allocate memory for paper size structure.\n");
-
+            ERR("Failed to allocate memory for paper size structure.\n");
             goto exit;
         }
 
         snprintf(paper_size->name, PAPER_NAME_SIZE, "%s", name);
         paper_size->size = sizes[i];
-        paper_size->dimensions = dimensions[i];
+        paper_size->width_mm = dimensions[i].x / 10.0f;
+        paper_size->height_mm = dimensions[i].y / 10.0f;
         break;
     }
 
     if (paper_size == NULL)
     {
-        fprintf(stderr, "Failed to find matching paper size.\n");
+        ERR("Failed to find matching paper size.\n");
         goto exit;
     }
+
+    DBG("Found paper size: name=%s, size=%d, width=%.1f mm, height=%.1f mm\n",
+        paper_size->name,
+        paper_size->size,
+        paper_size->width_mm,
+        paper_size->height_mm);
 
 exit:
     if (sizes != NULL)
@@ -268,18 +308,20 @@ exit:
     return paper_size;
 }
 
-static BOOL configure_printer(
+static DEVMODE *set_paper_size(
     char *printer_name,
-    DEVMODE *devmode,
     struct paper_size *paper_size,
     BOOL landscape)
 {
-    HANDLE printer = NULL;
+    DEVMODE *devmode = NULL;
+    HANDLE printer = INVALID_HANDLE_VALUE;
     int devmode_size = 0;
+
+    DBG("Setting paper size to %s\n", paper_size->name, paper_size->size);
 
     if (!OpenPrinter(printer_name, &printer, NULL))
     {
-        fprintf(stderr, "Failed to open printer %s.\n", printer_name);
+        ERR("Failed to open printer %s.\n", printer_name);
         goto exit;
     }
 
@@ -288,14 +330,14 @@ static BOOL configure_printer(
 
     if (devmode_size <= 0)
     {
-        fprintf(stderr, "Failed to get printer properties size.\n");
+        ERR("Failed to get printer properties size.\n");
         goto exit;
     }
 
     devmode = (DEVMODE *)malloc(devmode_size);
     if (devmode == NULL)
     {
-        fprintf(stderr, "Failed to allocate memory for printer properties.\n");
+        ERR("Failed to allocate memory for printer properties.\n");
         goto exit;
     }
 
@@ -307,52 +349,65 @@ static BOOL configure_printer(
             NULL,
             DM_OUT_BUFFER) != IDOK)
     {
-        fprintf(stderr, "Failed to get printer properties.\n");
+        ERR("Failed to get printer properties.\n");
         goto exit;
     }
 
-    /* Set the paper size. */
-    devmode->dmFields = DM_PAPERSIZE | DM_ORIENTATION;
+    /* Configure our page settings. */
+    devmode->dmFields |= DM_PAPERSIZE | DM_ORIENTATION;
     devmode->dmPaperSize = paper_size->size;
     devmode->dmOrientation = landscape ? DMORIENT_LANDSCAPE : DMORIENT_PORTRAIT;
 
-    if (DocumentProperties(
-            NULL,
-            printer,
-            printer_name,
-            devmode,
-            devmode,
-            (DM_IN_BUFFER | DM_OUT_BUFFER)) != IDOK)
+    if (!dry_run)
     {
-        fprintf(stderr, "Failed to set paper size.\n");
-        goto exit;
+        if (DocumentProperties(
+                NULL,
+                printer,
+                printer_name,
+                devmode,
+                devmode,
+                (DM_IN_BUFFER | DM_OUT_BUFFER)) != IDOK ||
+            devmode == NULL)
+        {
+            ERR("Failed to set paper size or devmode is invalid.\n");
+            goto exit;
+        }
     }
 
-    if (!ClosePrinter(printer))
-    {
-        fprintf(stderr, "Failed to close printer.\n");
-        goto exit;
-    }
+    DBG("Printer properties: paper size=%d, orientation=%s\n",
+        devmode->dmPaperSize,
+        (devmode->dmOrientation == DMORIENT_LANDSCAPE) ? "landscape" : "portrait");
 
-    return TRUE;
+    return devmode;
 
 exit:
     if (printer != INVALID_HANDLE_VALUE)
         ClosePrinter(printer);
 
     if (devmode != NULL)
+    {
         free(devmode);
+    }
 
-    return FALSE;
+    return NULL;
 }
 
 static struct label *open_label(char *filename)
 {
-    struct label *label = NULL;
     HANDLE f;
     DWORD sizel, sizeh, bytes_read;
     void *file_data = NULL;
     BOOL success = FALSE;
+    BITMAPFILEHEADER *header = NULL;
+    struct label *label = NULL;
+
+    if (filename == NULL)
+    {
+        ERR("Filename is NULL.\n");
+        return NULL;
+    }
+
+    DBG("Opening label file: %s\n", filename);
 
     f = CreateFile(
         filename,
@@ -365,54 +420,86 @@ static struct label *open_label(char *filename)
 
     if (f == INVALID_HANDLE_VALUE)
     {
-        fprintf(stderr, "Failed to open: %s\n", filename);
         goto exit;
     }
 
     sizel = GetFileSize(f, &sizeh);
     if (sizeh > 0)
     {
-        fprintf(stderr, "%s is too large to process.\n", filename);
+        ERR("%s is too large to process.\n", filename);
         goto exit;
     }
 
     file_data = malloc(sizel);
     if (file_data == NULL)
     {
-        fprintf(stderr, "Failed to allocate memory for file data.\n");
+        ERR("Failed to allocate memory for file data.\n");
         goto exit;
     }
 
     success = ReadFile(f, file_data, sizel, &bytes_read, NULL);
     if (!success || bytes_read != sizel)
     {
-        fprintf(stderr, "Failed to read file.\n");
         goto exit;
     }
 
-    CloseHandle(f);
+    DBG("Read %d bytes\n", bytes_read);
 
+    header = (BITMAPFILEHEADER *)file_data;
+    DBG("Bitmap type: %x\n", header->bfType);
+    DBG("Bitmap size: %d\n", header->bfSize);
+
+    /* Ensure we're dealing with a bitmap file. */
+    if ((header->bfType != 0x4D42) ||
+        (header->bfSize != sizel))
+    {
+        ERR("%s is not a valid bitmap file.\n", filename);
+        goto exit;
+    }
+
+    /* Ensure the file is well-formed. */
+    if (header->bfOffBits < (sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER)) ||
+        header->bfOffBits > sizel)
+    {
+        ERR("%s is not a valid bitmap file.\n", filename);
+        goto exit;
+    }
+
+    /* Create our label structure. */
     label = (struct label *)malloc(sizeof(struct label));
     if (label == NULL)
     {
-        fprintf(stderr, "Failed to allocate memory for label.\n");
+        ERR("Failed to allocate memory for label structure.\n");
         goto exit;
     }
 
-    label->header = (BITMAPFILEHEADER *)file_data;
-    label->size = sizel;
+    label->header = header;
+    label->info_header = (BITMAPINFOHEADER *)(header + 1);
+    label->bits = (char *)header + header->bfOffBits;
+    label->width = label->info_header->biWidth;
+    label->height = label->info_header->biHeight;
+    label->xres = label->info_header->biXPelsPerMeter;
+    label->yres = label->info_header->biYPelsPerMeter;
+
+    DBG("Bitmap width: %d px\n", label->width);
+    DBG("Bitmap height: %d px\n", label->height);
+    DBG("Bitmap xres: %d px/m\n", label->xres);
+    DBG("Bitmap yres: %d px/m\n", label->yres);
+
+    CloseHandle(f);
+    f = INVALID_HANDLE_VALUE;
 
     return label;
 
 exit:
-    if (label != NULL)
-        free(label);
-
     if (f != INVALID_HANDLE_VALUE)
         CloseHandle(f);
 
     if (file_data != NULL)
         free(file_data);
+
+    if (label != NULL)
+        free(label);
 
     return NULL;
 }
@@ -422,28 +509,179 @@ static void close_label(struct label *label)
     if (label == NULL)
         return;
 
+    if (label->header != NULL)
+        free(label->header);
+
     free(label);
 }
 
-static void print_label(
-    HDC context,
+static BOOL print_label(
+    HDC printer_context,
     char *printer_name,
-    struct paper_size *paper_size,
     char *filename)
 {
     BOOL success = FALSE;
+    struct label *label = NULL;
 
-    struct label *label = open_label(filename);
+    int page_w, page_h;
+    int print_w, print_h;
+    int print_resx, print_resy;
+    int print_offx, print_offy;
+
+    int bitmap_print_w, bitmap_print_h;
+    int bitmap_print_offx, bitmap_print_offy;
+
+    int saved_state = 0;
+    DOCINFOA doc_info = {0};
+
+    label = open_label(filename);
     if (label == NULL)
     {
-        printf("⚠️ Failed to open label!\n");
+        ERR("Failed to open %s.\n", filename);
         goto exit;
     }
 
-    printf(" 🏷️ %s\n", filename);
+    /* Figure out the printable area in pixels, and the resolution in
+     * pixels per meter. */
+    page_w = GetDeviceCaps(printer_context, PHYSICALWIDTH);
+    page_h = GetDeviceCaps(printer_context, PHYSICALHEIGHT);
+    print_w = GetDeviceCaps(printer_context, HORZRES);
+    print_h = GetDeviceCaps(printer_context, VERTRES);
+
+    print_resx = GetDeviceCaps(printer_context, LOGPIXELSX) * 10000 / 254;
+    print_resy = GetDeviceCaps(printer_context, LOGPIXELSY) * 10000 / 254;
+
+    print_offx = GetDeviceCaps(printer_context, PHYSICALOFFSETX);
+    print_offy = GetDeviceCaps(printer_context, PHYSICALOFFSETY);
+
+    DBG("Page size: %d x %d px\n", page_w, page_h);
+    DBG("Printable area: %d x %d px\n", print_w, print_h);
+    DBG("Printer resolution: %d x %d px/m\n", print_resx, print_resy);
+    DBG("Printer offset: %d x %d px\n", print_offx, print_offy);
+
+    /* Convert bitmap into printer units and calculate offset
+     * to center on printable area. */
+    bitmap_print_w = (label->width * print_resx) / label->xres;
+    bitmap_print_h = (label->height * print_resy) / label->yres;
+    bitmap_print_offx = (print_w - bitmap_print_w) / 2;
+    bitmap_print_offy = (print_h - bitmap_print_h) / 2;
+
+    DBG("Bitmap print size: %d x %d px\n", bitmap_print_w, bitmap_print_h);
+    DBG("Bitmap print offset: %d x %d px\n", bitmap_print_offx, bitmap_print_offy);
+
+    /* Before we mess with the printer, we'll store its state. */
+    saved_state = SaveDC(printer_context);
+    if (saved_state <= 0)
+    {
+        ERR("Failed to save printer context.\n");
+        goto exit;
+    }
+
+    /* Set up the coordinate space to handle the scaling. */
+    if (SetMapMode(printer_context, MM_ISOTROPIC) == 0)
+    {
+        ERR("Failed to set map mode.\n");
+        goto exit;
+    }
+
+    if (SetWindowExtEx(
+            printer_context,
+            label->width,
+            label->height,
+            NULL) == 0)
+    {
+        ERR("Failed to set window extents.\n");
+        goto exit;
+    }
+
+    if (SetViewportExtEx(
+            printer_context,
+            bitmap_print_w,
+            bitmap_print_h,
+            NULL) == 0)
+    {
+        ERR("Failed to set viewport extents.\n");
+        goto exit;
+    }
+
+    if (SetViewportOrgEx(
+            printer_context,
+            bitmap_print_offx,
+            bitmap_print_offy,
+            NULL) == 0)
+    {
+        ERR("Failed to set viewport origin.\n");
+        goto exit;
+    }
+
+    /* Our print job will be a document with just one page in it. */
+    doc_info.cbSize = sizeof(DOCINFOA);
+    doc_info.lpszDocName = filename;
+    doc_info.lpszOutput = NULL;
+    doc_info.lpszDatatype = NULL;
+    doc_info.fwType = 0;
+
+    if (dry_run)
+    {
+        /* Skip the actual print. */
+        success = TRUE;
+        goto exit;
+    }
+
+    if (StartDocA(
+            printer_context,
+            &doc_info) <= 0)
+    {
+        ERR("Failed to start document.\n");
+        goto exit;
+    }
+
+    if (StartPage(printer_context) <= 0)
+    {
+        ERR("Failed to start page.\n");
+        goto exit;
+    }
+
+    if (StretchDIBits(
+            printer_context,
+            0, 0, label->width, label->height,
+            0, 0, label->width, label->height,
+            label->bits,
+            (BITMAPINFO *)label->info_header,
+            DIB_RGB_COLORS,
+            SRCCOPY) <= 0)
+    {
+        ERR("Failed to print label.\n");
+        goto exit;
+    }
+
+    if (EndPage(printer_context) <= 0)
+    {
+        ERR("Failed to end page.\n");
+        goto exit;
+    }
+
+    if (EndDoc(printer_context) <= 0)
+    {
+        ERR("Failed to end document.\n");
+        goto exit;
+    }
+
+    success = TRUE;
 
 exit:
-    close_label(label);
+    if (label != NULL)
+    {
+        close_label(label);
+    }
+
+    if (saved_state > 0 && !RestoreDC(printer_context, saved_state))
+    {
+        ERR("Failed to restore printer context.\n");
+        success = FALSE;
+    }
+
+    return success;
 }
 
 int main(int argc, char **argv)
@@ -464,7 +702,7 @@ int main(int argc, char **argv)
     while ((opt = getopt_long(
                 argc,
                 argv,
-                "p:s:o:h",
+                "p:s:o:dvh",
                 long_options,
                 NULL)) != -1)
     {
@@ -482,6 +720,14 @@ int main(int argc, char **argv)
             orientation = optarg;
             break;
 
+        case 'd':
+            dry_run = TRUE;
+            break;
+
+        case 'v':
+            verbose = TRUE;
+            break;
+
         case 'h':
             print_usage();
             exit(EXIT_SUCCESS);
@@ -497,7 +743,7 @@ int main(int argc, char **argv)
     file_count = argc - optind;
     if (file_count <= 0)
     {
-        fprintf(stderr, "No files to process!\n");
+        ERR("No files to process!\n");
         print_usage();
         exit(EXIT_FAILURE);
     }
@@ -524,7 +770,7 @@ int main(int argc, char **argv)
     }
     else
     {
-        fprintf(stderr, "Invalid orientation: %s\n", orientation);
+        ERR("Invalid orientation: %s\n", orientation);
         print_usage();
         exit(EXIT_FAILURE);
     }
@@ -561,7 +807,22 @@ int main(int argc, char **argv)
         goto exit;
     }
 
-    if (!configure_printer(printer_name, devmode, paper_size, is_landscape))
+    printf(" 🖨️ %s\n", printer_name);
+    printf(
+        " 📄 %s (%s) %.1f x %.1f mm\n",
+        paper_size_name,
+        orientation,
+        paper_size->width_mm,
+        paper_size->height_mm);
+
+    if (dry_run)
+    {
+        printf(" ⚠️ Dry run only.\n");
+    }
+
+    /* Set up the printer context for printing the labels. */
+    devmode = set_paper_size(printer_name, paper_size, is_landscape);
+    if (devmode == NULL)
     {
         goto exit;
     }
@@ -569,17 +830,20 @@ int main(int argc, char **argv)
     context = CreateDC("WINSPOOL", printer_name, NULL, devmode);
     if (context == NULL)
     {
-        fprintf(stderr, "Failed to create printer context.\n");
+        ERR("Failed to create printer context.\n");
         goto exit;
     }
-
-    printf(" 🖨️ %s\n", printer_name);
-    printf(" 📄 %s (%s)\n", paper_size_name, orientation);
 
     for (int i = 0; i < file_count; i++)
     {
         char *filename = argv[optind + i];
-        print_label(context, printer_name, paper_size, filename);
+        if (!print_label(context, printer_name, filename))
+        {
+            ERR("Failed to print %s.\n", filename);
+            goto exit;
+        }
+
+        printf(" 🏷️ %s\n", filename);
     }
 
 exit:
