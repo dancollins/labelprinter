@@ -11,14 +11,14 @@
 #define PAPER_NAME_SIZE (64)
 
 #define RESET "\x1b[0m"
+#define DIM "\x1b[2m"
 #define RED "\x1b[31m"
-#define BLUE "\x1b[34m"
 
 #define DBG(...)                          \
     {                                     \
         if (verbose)                      \
         {                                 \
-            fputs(BLUE, stdout);          \
+            fputs(DIM "   ", stdout);     \
             fprintf(stdout, __VA_ARGS__); \
             fputs(RESET, stdout);         \
         }                                 \
@@ -26,7 +26,7 @@
 
 #define ERR(...)                      \
     {                                 \
-        fputs(RED, stderr);           \
+        fputs(RED " 🚨 ", stderr);    \
         fprintf(stderr, __VA_ARGS__); \
         fputs(RESET, stderr);         \
     }
